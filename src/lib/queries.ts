@@ -141,6 +141,112 @@ export async function fetchWorkOrderEvents(
   );
 }
 
+/** Rows per page on the admin screens. */
+export const ADMIN_PAGE_SIZE = 10;
+
+/** One page of rows, plus how many exist in total, for "Page 1 of 4". */
+export interface Page<T> {
+  rows: T[];
+  total: number;
+}
+
+export async function fetchVesselsPage(options?: {
+  includeInactive?: boolean;
+  page?: number;
+}): Promise<Page<VesselRow>> {
+  const page = options?.page ?? 0;
+  const from = page * ADMIN_PAGE_SIZE;
+
+  // `count: "exact"` rides along on the same request — PostgREST returns it in
+  // the Content-Range header, so the total costs no extra round trip.
+  let query = supabase
+    .from("vessels")
+    .select("*", { count: "exact" })
+    .order("name")
+    .range(from, from + ADMIN_PAGE_SIZE - 1);
+  if (!options?.includeInactive) query = query.eq("active", true);
+
+  const { data, error, count } = await query;
+  if (error) throw error;
+  return { rows: data ?? [], total: count ?? 0 };
+}
+
+export async function fetchProfilesPage(options?: {
+  includeInactive?: boolean;
+  page?: number;
+}): Promise<Page<ProfileRow>> {
+  const page = options?.page ?? 0;
+  const from = page * ADMIN_PAGE_SIZE;
+
+  let query = supabase
+    .from("profiles")
+    .select("*", { count: "exact" })
+    .order("name")
+    .range(from, from + ADMIN_PAGE_SIZE - 1);
+  if (!options?.includeInactive) query = query.eq("active", true);
+
+  const { data, error, count } = await query;
+  if (error) throw error;
+  return { rows: data ?? [], total: count ?? 0 };
+}
+
+/** Assignments for just the vessels currently on screen. */
+export async function fetchAssignmentsForVessels(
+  vesselIds: string[],
+): Promise<VesselAssignmentRow[]> {
+  if (vesselIds.length === 0) return [];
+  return unwrap(
+    await supabase
+      .from("vessel_assignments")
+      .select("*")
+      .in("vessel_id", vesselIds)
+      .order("assigned_at"),
+  );
+}
+
+/** Profiles for a known set of ids — used to name the people in a crew list. */
+export async function fetchProfilesByIds(ids: string[]): Promise<ProfileRow[]> {
+  if (ids.length === 0) return [];
+  return unwrap(await supabase.from("profiles").select("*").in("id", ids));
+}
+
+/**
+ * Duplicate lookups run against the database rather than the rows currently on
+ * screen. Once a list is paged, an in-memory scan would quietly miss a clash
+ * sitting on another page — the unique index would still block the write, but
+ * the admin would only find out after pressing save.
+ */
+export async function findProfileByEmail(
+  email: string,
+  excludeId: string | null,
+): Promise<ProfileRow | null> {
+  const trimmed = email.trim();
+  if (!trimmed) return null;
+
+  let query = supabase.from("profiles").select("*").ilike("email", trimmed);
+  if (excludeId) query = query.neq("id", excludeId);
+
+  const { data, error } = await query.limit(1).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function findVesselByIdentifier(
+  field: "imo_number" | "mmsi",
+  value: string,
+  excludeId: string | null,
+): Promise<VesselRow | null> {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  let query = supabase.from("vessels").select("*").eq(field, trimmed);
+  if (excludeId) query = query.neq("id", excludeId);
+
+  const { data, error } = await query.limit(1).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function fetchVessels(
   includeInactive = false,
 ): Promise<VesselRow[]> {

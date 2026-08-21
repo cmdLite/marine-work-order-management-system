@@ -5,7 +5,13 @@ import { Link2Off, Plus, UserPlus } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { parseError } from "@/lib/errors";
 import { useList, useQuery } from "@/lib/hooks";
-import { fetchAssignments, fetchProfiles, fetchVessels } from "@/lib/queries";
+import {
+  ADMIN_PAGE_SIZE,
+  fetchAssignmentsForVessels,
+  fetchProfiles,
+  fetchVessels,
+} from "@/lib/queries";
+import { Pagination } from "@/components/ui/pagination";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
@@ -27,19 +33,46 @@ import { ROLE_LABEL } from "@/lib/utils";
  */
 export function AssignmentsManager() {
   const { toast } = useToast();
+  // `vessels` and `profiles` are the small dimension tables here and both feed
+  // the pickers in the Assign dialog, so they are fetched whole. The table that
+  // actually grows with the fleet is vessel_assignments — vessels × crew — and
+  // that one is only ever fetched for the vessels currently on screen.
   const vesselsQuery = useQuery([], () => fetchVessels(true));
   const peopleQuery = useQuery([], () => fetchProfiles());
-  const assignmentsQuery = useQuery([], () => fetchAssignments());
 
   const [open, setOpen] = React.useState(false);
   const [vesselId, setVesselId] = React.useState<string | null>(null);
   const [userId, setUserId] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [busyKey, setBusyKey] = React.useState<string | null>(null);
+  const [page, setPage] = React.useState(0);
 
   const vessels = useList(vesselsQuery.data);
   const people = useList(peopleQuery.data);
+
+  const visibleVessels = React.useMemo(
+    () => vessels.slice(page * ADMIN_PAGE_SIZE, (page + 1) * ADMIN_PAGE_SIZE),
+    [vessels, page],
+  );
+  const visibleVesselIds = visibleVessels.map((vessel) => vessel.id).join(",");
+
+  const assignmentsQuery = useQuery([visibleVesselIds], () =>
+    fetchAssignmentsForVessels(visibleVesselIds ? visibleVesselIds.split(",") : []),
+  );
   const assignments = useList(assignmentsQuery.data);
+
+  /**
+   * The dialog can target a vessel that is not on the current page, so it reads
+   * that vessel's assignments directly instead of the page's. Without this the
+   * Captain-first rule and the already-assigned filter would both be judging a
+   * vessel they had no rows for.
+   */
+  const dialogAssignmentsQuery = useQuery(
+    [vesselId],
+    () => fetchAssignmentsForVessels(vesselId ? [vesselId] : []),
+    { enabled: open && Boolean(vesselId) },
+  );
+  const dialogAssignments = useList(dialogAssignmentsQuery.data);
 
   const peopleById = React.useMemo(
     () => new Map(people.map((person) => [person.id, person])),
@@ -58,29 +91,35 @@ export function AssignmentsManager() {
     return map;
   }, [assignments, peopleById]);
 
-  const vesselHasCaptain = React.useMemo(() => {
-    if (!vesselId) return false;
-    return (byVessel.get(vesselId) ?? []).some(
-      (assignment) => peopleById.get(assignment.user_id)?.role === "captain",
-    );
-  }, [byVessel, peopleById, vesselId]);
+  const activeDialogAssignments = React.useMemo(
+    () =>
+      dialogAssignments.filter(
+        (assignment) => assignment.active && peopleById.has(assignment.user_id),
+      ),
+    [dialogAssignments, peopleById],
+  );
+
+  const vesselHasCaptain = activeDialogAssignments.some(
+    (assignment) => peopleById.get(assignment.user_id)?.role === "captain",
+  );
 
   // An empty vessel must get its Captain first — the Person list only offers
   // Captains until one is assigned, then opens up to Captains and Crew alike.
   const assignableToVessel = React.useMemo(() => {
     if (!vesselId) return [];
     const already = new Set(
-      (byVessel.get(vesselId) ?? []).map((assignment) => assignment.user_id),
+      activeDialogAssignments.map((assignment) => assignment.user_id),
     );
     return people.filter((person) => {
       if (already.has(person.id)) return false;
       if (person.role === "admin") return false;
       return vesselHasCaptain || person.role === "captain";
     });
-  }, [people, byVessel, vesselId, vesselHasCaptain]);
+  }, [people, activeDialogAssignments, vesselId, vesselHasCaptain]);
 
   function refreshAll() {
     assignmentsQuery.refresh();
+    dialogAssignmentsQuery.refresh();
   }
 
   function openAssign(preselectedVesselId: string | null) {
@@ -179,7 +218,7 @@ export function AssignmentsManager() {
         </Card>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
-          {vessels.map((vessel) => {
+          {visibleVessels.map((vessel) => {
             const crew = byVessel.get(vessel.id) ?? [];
             const captains = crew.filter(
               (assignment) =>
@@ -284,6 +323,20 @@ export function AssignmentsManager() {
         </div>
       )}
 
+      {vessels.length > ADMIN_PAGE_SIZE ? (
+        <Card>
+          <Pagination
+            page={page}
+            pageSize={ADMIN_PAGE_SIZE}
+            total={vessels.length}
+            loading={assignmentsQuery.loading}
+            onPageChange={setPage}
+            noun="vessel"
+            className="border-t-0"
+          />
+        </Card>
+      ) : null}
+
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           title="Assign to a vessel"
@@ -307,22 +360,29 @@ export function AssignmentsManager() {
               label="Person"
               required
               hint={
-                assignableToVessel.length > 0
-                  ? undefined
-                  : !vesselHasCaptain
-                    ? "This vessel needs a Captain assigned before any Crew."
-                    : "Everyone eligible is already assigned to this vessel."
+                dialogAssignmentsQuery.loading
+                  ? "Checking who is already aboard…"
+                  : assignableToVessel.length > 0
+                    ? undefined
+                    : !vesselHasCaptain
+                      ? "This vessel needs a Captain assigned before any Crew."
+                      : "Everyone eligible is already assigned to this vessel."
               }
             >
               <Select
                 value={userId}
                 onValueChange={setUserId}
+                // Held shut until this vessel's current crew is known, so the
+                // Captain-first rule is never applied against an empty list.
+                disabled={dialogAssignmentsQuery.loading}
                 options={assignableToVessel.map((person) => ({
                   value: person.id,
                   label: person.name,
                   description: `${ROLE_LABEL[person.role]} / ${person.email}`,
                 }))}
-                placeholder="Select a person"
+                placeholder={
+                  dialogAssignmentsQuery.loading ? "Loading…" : "Select a person"
+                }
               />
             </Field>
           </div>
