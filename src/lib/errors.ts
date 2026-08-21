@@ -39,6 +39,21 @@ export function parseError(error: unknown): AppError {
     }
   }
 
+  // An access token that lapsed while the tab sat idle. PostgREST answers 401
+  // with PGRST301 and a message about decoding keys, which means nothing to the
+  // person reading it — and the session usually recovers on its own, because the
+  // refresh token is still good.
+  if (
+    /PGRST301/.test(raw) ||
+    /jwt expired/i.test(raw) ||
+    /(no suitable key|able to decode the jwt)/i.test(raw)
+  ) {
+    return {
+      kind: "NOT_AUTHENTICATED",
+      message: "Your session expired. Reconnecting — try that again in a moment.",
+    };
+  }
+
   // Postgres-level failures that never reached our own guards.
   if (/row-level security/i.test(raw) || /permission denied/i.test(raw)) {
     return {

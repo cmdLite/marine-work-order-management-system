@@ -146,6 +146,30 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     return () => listener.subscription.unsubscribe();
   }, [load]);
 
+  /**
+   * Refresh the access token when the tab comes back to the foreground.
+   *
+   * supabase-js keeps the token alive on a timer, but browsers throttle timers
+   * in hidden tabs and stop them altogether while the machine sleeps. Left long
+   * enough, the token lapses and the next query comes back 401 (PGRST301) even
+   * though the refresh token is still perfectly good — which is why a reload
+   * always appeared to fix it. Asking for the session on wake performs that
+   * refresh before the user's next click can fail.
+   */
+  React.useEffect(() => {
+    const refreshIfStale = () => {
+      if (document.visibilityState !== "visible") return;
+      void supabase.auth.getSession();
+    };
+
+    document.addEventListener("visibilitychange", refreshIfStale);
+    window.addEventListener("focus", refreshIfStale);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfStale);
+      window.removeEventListener("focus", refreshIfStale);
+    };
+  }, []);
+
   const setActiveVesselId = React.useCallback((vesselId: string | null) => {
     setActiveVesselIdState(vesselId);
     if (typeof window !== "undefined") {
