@@ -1,15 +1,17 @@
 # Marine Work Order Management System
 
-Vessel-scoped work orders, crew management and role-based operations for a small
-fleet — built on **Next.js (App Router) + TypeScript + Supabase**, with no login
-screen anywhere. A reviewer picks a vessel, a role and a member from the Identity
-Bar, and the app behaves exactly as if that person had signed in: their data
-scope, their permissions, their available actions.
+A small dashboard for running work orders, crew and vessels across a fleet of
+ships — built with Next.js, TypeScript and Supabase. There's no login screen
+anywhere. Instead, you pick who you are from a bar at the top of the page, and
+the app shows you exactly what that person would see if they'd logged in
+themselves.
 
-The trick is that the impersonation is real. Each mock user is backed by a
-hidden Supabase Auth account; selecting them mints a genuine session, so
-`auth.uid()` is real and **every authorization decision is made by PostgreSQL
-Row Level Security**, not by the interface.
+That "picking who you are" isn't just cosmetic. Every mock user in this app is
+backed by a real, hidden Supabase Auth account. When you select someone from
+the Identity Bar, you're actually signing in as them — `auth.uid()` becomes a
+genuine value, and every permission check from that point on is enforced by
+PostgreSQL's Row Level Security, not by the interface deciding what to show
+you.
 
 ---
 
@@ -18,32 +20,31 @@ Row Level Security**, not by the interface.
 - [Quick start](#quick-start)
 - [Deployment](#deployment)
 - [ERD](#erd)
-- [How the mock auth works](#how-the-mock-auth-works)
-- [Security model](#security-model)
-- [Work order lifecycle](#work-order-lifecycle)
+- [Assumptions and decisions I made](#assumptions-and-decisions-i-made)
+- [Where I went further than asked](#where-i-went-further-than-asked)
+- [How permissions are enforced](#how-permissions-are-enforced)
+- [The work order lifecycle](#the-work-order-lifecycle)
 - [Business rules and guardrails](#business-rules-and-guardrails)
-- [Concurrency](#concurrency)
-- [Project layout](#project-layout)
-- [Testing](#testing)
 - [Demo accounts](#demo-accounts)
 
 ---
 
 ## Quick start
 
-**1. Create a Supabase project** at [supabase.com](https://supabase.com) (any
-region). Note the project URL and both API keys.
+**1. Create a Supabase project** at [supabase.com](https://supabase.com) — any
+region works. Grab the project URL and both API keys from Project Settings.
 
-**2. Apply the schema.** Open the Supabase SQL Editor and run, in order:
+**2. Apply the schema.** Open the Supabase SQL Editor and run these three
+files, in order:
 
 ```
 supabase/migrations/0001_schema.sql      -- tables, constraints, indexes, triggers
 supabase/migrations/0002_rls.sql         -- session helpers + Row Level Security
-supabase/migrations/0003_functions.sql   -- lifecycle RPCs + admin guardrails
+supabase/migrations/0003_functions.sql   -- lifecycle functions + admin guardrails
 ```
 
-`supabase/schema.sql` is the same three files concatenated, if you would rather
-paste once. All of it is idempotent — re-running is safe.
+Or just paste `supabase/schema.sql` once — it's the same three files
+concatenated. Everything is written so it's safe to re-run.
 
 **3. Configure the app.**
 
@@ -52,15 +53,15 @@ cp .env.example .env.local     # then fill in the four values
 npm install
 ```
 
-`IMPERSONATION_SECRET` can be anything long and random (`openssl rand -base64 32`).
-It is the seed for each hidden account's credential, so changing it later means
-re-seeding.
+`IMPERSONATION_SECRET` can be any long random string
+(`openssl rand -base64 32` works fine). It's used to derive each hidden
+account's password, so if you change it later you'll need to re-seed.
 
 **4. Seed the demo fleet** — three vessels, ten people, ten work orders spread
-across every lifecycle state:
+across every stage of the lifecycle:
 
 ```bash
-npm run db:seed      # idempotent
+npm run db:seed      # safe to run again
 npm run db:reset     # wipe and rebuild from scratch
 ```
 
@@ -70,7 +71,7 @@ npm run db:reset     # wipe and rebuild from scratch
 npm run dev          # http://localhost:3000
 ```
 
-Pick anyone from the Identity Bar and start clicking.
+Pick anyone from the Identity Bar and start clicking around.
 
 ---
 
@@ -78,31 +79,33 @@ Pick anyone from the Identity Bar and start clicking.
 
 ### Vercel
 
-1. Push this repository to GitHub.
-2. In Vercel, **Add New → Project**, import the repo. The framework preset is
-   detected automatically; no build settings need changing.
-3. Add four environment variables (Production, Preview and Development):
+1. Push the repo to GitHub.
+2. In Vercel, **Add New → Project**, import it. The framework is detected
+   automatically — nothing to configure there.
+3. Add the same four environment variables from your `.env.local`
+   (Production, Preview and Development):
 
-   | Variable | Value |
-   |---|---|
-   | `NEXT_PUBLIC_SUPABASE_URL` | your project URL |
-   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon / publishable key |
-   | `SUPABASE_SERVICE_ROLE_KEY` | service_role key — **never** prefix with `NEXT_PUBLIC_` |
-   | `IMPERSONATION_SECRET` | the same value you seeded with |
+   | Variable                        | Value                                                        |
+   | ------------------------------- | ------------------------------------------------------------ |
+   | `NEXT_PUBLIC_SUPABASE_URL`      | your project URL                                             |
+   | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | anon / publishable key                                       |
+   | `SUPABASE_SERVICE_ROLE_KEY`     | service*role key — never prefix this one with `NEXT_PUBLIC*` |
+   | `IMPERSONATION_SECRET`          | the same value you seeded with                               |
 
-4. Deploy. Nothing else is required — there are no redirect URLs or auth
-   callbacks to configure, because there is no login flow.
+4. Deploy. That's it — there's no redirect URL or auth callback to set up,
+   because there's no login flow to configure.
 
 ### Netlify
 
-Same four variables; build command `npm run build`, and install
-`@netlify/plugin-nextjs` (Netlify adds it automatically for Next projects).
+Same four variables, build command `npm run build`. Netlify adds
+`@netlify/plugin-nextjs` for you automatically on a Next.js project.
 
 ### Keeping the database awake
 
-Supabase's free tier pauses a project after a stretch of inactivity, which would
-take the live URL down mid-review. Either move the project to a paid tier, or
-ping it on a schedule — a Vercel Cron hitting any page once a day is enough.
+Supabase's free tier pauses a project after a while of no activity, which
+would quietly take the live demo down. Either move to a paid tier, or ping
+the site on a schedule so it never goes idle — a daily Vercel Cron hitting
+any page is enough.
 
 ---
 
@@ -202,101 +205,148 @@ Notes on the shape:
 
 ---
 
-## How the mock auth works
+## Assumptions and decisions I made
 
-The original brief pulls in three directions at once: browser-side Supabase
-calls, real RLS authorization, and no login flow. Plain anon-key RLS keys off
-`auth.uid()`, which does not exist without a session — so without addressing
-this, either the policies cannot tell who is asking, or the app quietly falls
-back to client-side checks that a reviewer can bypass with the browser console.
+The brief left a few things open to interpretation. Here's what I decided,
+and why — these were conscious calls, not guesses I happened to land on.
 
-The resolution is **hidden pre-seeded auth accounts**:
-
-```
-Identity Bar: pick "Capt. Ana Mora"
-      │
-      ▼
-POST /api/impersonate { profileId }          (server, service-role key)
-      │  looks the profile up server-side, checks it is active,
-      │  derives that account's credential from IMPERSONATION_SECRET,
-      │  exchanges it for a real Supabase session
-      ▼
-supabase.auth.setSession({ access_token, refresh_token })   (browser)
-      │
-      ▼
-Every subsequent query carries a real JWT.
-auth.uid() resolves. RLS applies. The database itself now believes
-it is talking to Ana Mora, because it is.
-```
-
-Consequences worth noting:
-
-- The profile id is the **only** client-supplied input to that route, and it is
-  validated as a UUID before it touches the database. The email and credential
-  are resolved server-side, so a caller cannot request a session for an
-  arbitrary address.
-- No credential ever reaches the browser. It is derived, not stored — rotating
-  `IMPERSONATION_SECRET` invalidates every backing account at once.
-- **Session persistence is free.** `supabase-js` already persists the session in
-  local storage and refreshes it, so a page reload keeps you signed in as
-  whoever was last selected. No custom persistence layer exists in this codebase.
-- A deactivated profile is refused at the route *and* dropped on the next load,
-  so a session cannot outlive the account.
+- **The vessel dropdown gives Admins an "All Vessels" option.** Admins aren't
+  tied to a single ship, so they need a fleet-wide view. Captains and Crew
+  only ever see vessels they're actually assigned to.
+- **One role per person, and roles don't stack.** Someone is an Admin, a
+  Captain, or Crew — never a combination. This is the standard
+  least-privilege approach, and it also matches the brief's Role Filter,
+  which treats role as a single value rather than a set.
+- **Vessels are keyed on IMO number first.** It's permanent for the life of
+  the hull. Smaller craft under 100 gross tons aren't required to carry an
+  IMO number, so for those I fall back to a combination of Name, MMSI and
+  Flag State.
+- **User duplicate checking has two tiers.** Email is a hard, database-level
+  unique key — it's also tied to the hidden auth account, so it genuinely
+  can't repeat. Name, phone and date of birth all matching is treated as a
+  warning instead, because two different people can legitimately share all
+  three, and I didn't want the system to block a real person over a
+  coincidence.
+- **Crew can serve on more than one vessel; a Captain can only command one at
+  a time.** Small fleets often share crew across ships for relief coverage,
+  but a vessel only ever has one Captain actively in charge.
+- **Two devices can be signed in as the same mock person at once, and that's
+  fine.** It's really no different from one person being logged in on a
+  laptop and a phone. Rather than build session locking to prevent it, I
+  just made sure that if two devices try to change the same work order at
+  nearly the same moment, only one write wins and the other gets a clear
+  "this was already updated" message instead of silently overwriting
+  anything.
+- **The seed data is a starting point, not a boundary.** Admins can still
+  create, edit and deactivate anything on top of it — the seeded fleet just
+  gives a reviewer something to look at immediately.
 
 ---
 
-## Security model
+## Where I went further than asked
 
-Everything below is in `supabase/migrations/0002_rls.sql` and
-`0003_functions.sql`, and is exercised by the test suite in
+A few things in here weren't explicitly requested, but felt worth doing
+properly once I was already in the area.
+
+- **A minimum age rule, based on real maritime regulation.** Crew must be at
+  least 16, and Admins and Captains at least 18 — this comes from the MLC
+  2006 seafarer age minimums, not a number I picked arbitrarily. The date
+  picker itself won't let you select an underage date.
+- **Phone and email fields clean up after you as you type.** Phone numbers
+  only accept digits, a leading `+`, and single spaces — no more collapsing
+  double spaces or stray punctuation. Email addresses are lowercased
+  automatically, and are checked for duplicates against the list already on
+  screen before you even hit save, so you find out immediately instead of
+  after a round trip to the server.
+- **The duplicate warning tells you who, not just that.** If a new user's
+  date of birth, name and phone all match someone existing, the popup shows
+  their name, role and vessel, and exactly which fields matched — so an
+  Admin can actually make a judgment call instead of guessing.
+- **MMSI got its own real uniqueness rule**, not just a fallback for vessels
+  without an IMO number. Two vessels can no longer share an MMSI at all, and
+  if a save fails, the error names the specific field that collided (IMO,
+  MMSI, or the name/MMSI/flag combination) instead of one generic message.
+- **Assigning crew to a vessel follows a sensible order.** An empty vessel
+  can only be assigned a Captain first — you can't staff a ship with Crew
+  before it has someone in charge. Once it has a Captain, the list opens up
+  to everyone eligible.
+- **Attestation and rejection are backed by a full audit trail, not just a
+  status flip.** Every rejection reason, every attest, every status change is
+  written to its own event log with who did it and when — so nothing is ever
+  overwritten or lost, and a Captain can look back at the entire history of a
+  work order, not just its current state. This is also where the guardrails
+  live: the system won't let an Admin deactivate someone, or stand a Captain
+  down, while they're still needed to close out active work.
+- **I closed a permission gap that isn't visible from the UI.** Early on,
+  the `vessel_assignments` table technically allowed an Admin's raw
+  database call to bypass the same guardrails described above — for
+  example, removing the only Captain from a vessel directly, skipping the
+  check that normally prevents it. I tightened that so every write to
+  that table has to go through the same guarded function the UI already
+  uses, the same way work orders already worked. Nothing in the app changed
+  because of it — the app never wrote to that table directly in the first
+  place — it just closes a door that shouldn't have been open.
+
+---
+
+## How permissions are enforced
+
+All of this lives in `supabase/migrations/0002_rls.sql` and
+`0003_functions.sql`, and it's exercised by the 44 checks in
 `scripts/test-policies.sql`.
 
-**RLS is on and forced for all five tables.** The `anon` role has *no* table
-privileges at all — not even `select`. A visitor who has not picked an identity
-can reach exactly two functions, `identity_vessels()` and `identity_members()`,
-which return vessel names and the display name + role of active members. No
-email, no phone, no date of birth, no work order data. That is the deliberate
-equivalent of a login page listing its demo accounts.
+Row Level Security is turned on for every table, and nobody — not even an
+Admin — can bypass it by accident. Someone who hasn't picked an identity yet
+can't read anything from the tables directly; the only things available
+before sign-in are two narrow functions that return vessel names and the
+display names and roles of active members. No email, no phone, no work order
+data. It's the same amount of information a login page's list of demo
+accounts would show you.
 
-Once signed in:
+Once someone is signed in:
 
-| Table | Read | Write |
-|---|---|---|
-| `vessels` | Admin: all. Captain/Crew: vessels they are actively assigned to. | Admin only |
-| `profiles` | Admin: all. Others: themselves + anyone sharing an active vessel. | Admin only |
-| `vessel_assignments` | Admin: all. Others: their own + their vessels' rows. | Admin only |
-| `work_orders` | Admin: all. Captain/Crew: their assigned vessels. | **No policy — RPC only** |
-| `work_order_events` | Follows the parent work order. | **No policy — RPC only** |
+| Table                | Who can read it                                                                                | Who can write to it                               |
+| -------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `vessels`            | Admins: everything. Captains/Crew: vessels they're actively assigned to.                       | Admin only                                        |
+| `profiles`           | Admins: everything. Everyone else: themselves, plus anyone sharing an active vessel with them. | Admin only                                        |
+| `vessel_assignments` | Admins: everything. Everyone else: their own rows, plus their vessels'.                        | No direct write — goes through a guarded function |
+| `work_orders`        | Admins: everything. Captains/Crew: their assigned vessels.                                     | No direct write — goes through a guarded function |
+| `work_order_events`  | Follows whatever work order it belongs to.                                                     | No direct write — goes through a guarded function |
 
-Work orders carry no `INSERT`/`UPDATE`/`DELETE` policy by design. Every state
-change goes through a `SECURITY DEFINER` function that re-derives the caller from
-`auth.uid()`, re-checks role and vessel assignment, enforces the legal
-transition, applies the concurrency guard and appends the audit event — all in
-one transaction. A crew member cannot skip a step, a captain cannot attest on a
-vessel they do not command, and nobody can write an event that did not happen.
+Work orders and vessel assignments don't have ordinary insert/update/delete
+rules at all. Every change to either one goes through a function that
+re-checks who's actually asking, confirms the change is legal, applies the
+concurrency check described below, and writes the audit event — all as one
+atomic step. A crew member can't skip a step in the lifecycle, a captain
+can't attest a work order on a vessel they don't command, and there's no way
+to write a history event that didn't really happen.
 
-Other deliberate choices:
+A few other things worth calling out:
 
-- **No table has a `DELETE` policy.** Records are deactivated, never destroyed.
-- Every helper and RPC pins `search_path = public, pg_temp`, so a `SECURITY
-  DEFINER` function cannot be hijacked by a shadowing object.
-- Default `EXECUTE` grants are revoked from `PUBLIC` and handed back explicitly
-  per role, rather than relying on PostgreSQL's permissive default.
-- **Injection:** no SQL string is ever assembled in the browser. Reads go through
-  PostgREST with bound filters; writes go through RPCs with typed arguments. The
-  single free-text filter (work order search) strips PostgREST pattern
-  metacharacters before it is used.
-- The service-role key is imported only in files marked `server-only`, and is
-  used for exactly two things: minting an impersonation session, and creating or
-  updating the hidden auth account behind a profile. Both routes verify the
-  caller's own JWT maps to an active Admin first — and if that check were
-  bypassed, RLS would still refuse the write.
-- Role escalation is closed: a Crew member updating their own `profiles.role`
-  matches no rows under RLS and silently changes nothing.
+- Nothing is ever hard-deleted. Records get deactivated instead, so history
+  and relationships stay intact.
+- Every helper function pins its own search path, which closes off a known
+  way these kinds of functions can be tricked into running the wrong code.
+- Permissions aren't left at Postgres's defaults — they're revoked first,
+  then handed back deliberately to exactly the roles that need them.
+- No SQL is ever built as a string in the browser. Reads go through
+  Supabase's query builder with proper bound filters, and writes go through
+  typed function calls. The one place a user can type free text into a
+  search (the work order search box) has any special filter characters
+  stripped before it's used.
+- The service-role key — the one with full access — only lives in two
+  server-side files, and is used for exactly two things: signing someone in
+  through impersonation, and creating or updating the hidden auth account
+  behind a profile. Both of those routes double-check the caller is
+  genuinely an Admin before doing anything, and even if that check were
+  somehow skipped, the database's own rules would still refuse the write.
+- A Crew member trying to promote themselves by editing their own role
+  simply doesn't work — the update matches zero rows under the security
+  rules, so nothing happens.
 
 ---
 
-## Work order lifecycle
+## The work order lifecycle
 
 ```
         Captain raises                Crew picks up            Crew documents
@@ -310,196 +360,94 @@ Other deliberate choices:
                                                                                           (closed)
 ```
 
-Exactly three statuses, as specified. `Done` is not terminal until it is
-attested — a captain can still send it back, which is why the guardrails below
-treat an unattested `Done` order as live work.
+Exactly three statuses, as the brief asks for. `Done` isn't really finished
+until it's attested, though — a Captain can still send it back — which is why
+every guardrail below treats an unattested `Done` order as still-active
+work.
 
 ---
 
 ## Business rules and guardrails
 
-**Roles** are single and mutually exclusive (`admin` / `captain` / `crew`), per
-least-privilege RBAC guidance against stacking roles.
+**Roles** are single and mutually exclusive — someone is an Admin, a
+Captain, or Crew, never more than one at a time.
 
 **Assignment**
 
-- Crew may be assigned to several vessels at once — small fleets share relief
-  staff. Enforced as a plain many-to-many.
-- A Captain holds **at most one active command**, enforced by a `BEFORE` trigger
-  on `vessel_assignments` rather than trusted to the UI.
-- Admins are fleet-wide and cannot be assigned to a vessel at all.
+- Crew can be assigned to more than one vessel at once, for fleets that
+  share relief staff.
+- A Captain can only actively command one vessel at a time — enforced in the
+  database itself, not just by the interface.
+- Admins aren't tied to any vessel and can't be assigned to one.
 
-**Duplicate detection for users** is tiered:
+**Checking for duplicate users** happens in two tiers:
 
-- *Tier 1, hard:* email is unique at the database level (case-insensitively), and
-  also identifies the hidden backing auth account.
-- *Tier 2, soft:* matching name **and** phone **and** date of birth against an
-  active user raises a "possible duplicate" warning the Admin can accept or
-  cancel — two different people can legitimately share all three, so this is
-  deliberately not a block.
+- _Hard:_ email has to be unique in the database, case-insensitively, and
+  it's also what identifies the hidden auth account behind a profile.
+- _Soft:_ if someone's name, phone and date of birth all match an existing
+  active user, the Admin sees a warning and can choose to continue or
+  cancel — since two different people really can share all three.
 
-**Duplicate detection for vessels** is a hard block, enforced by two
-independent unique indexes rather than one composite key: `imo_number` and
-`mmsi` may each not be shared by two vessels, and craft with neither fall back
-to a `(name, mmsi, flag_state)` unique index. The UI checks all three against
-the already-loaded vessel list as you type, before the database ever has to
-reject the write.
+**Checking for duplicate vessels** is a hard block rather than a warning.
+IMO number and MMSI each have to be unique on their own; vessels without
+either fall back to a combination of name, MMSI and flag state. The
+interface checks all of this against the vessels already loaded on screen as
+you type, so most of the time you'll see the problem before you even try to
+save.
 
-**Deactivation guardrails** (all enforced in the database, all with a message
-naming the exact blocking records):
+**Deactivation guardrails** — all enforced by the database, and all with a
+message that names the specific record causing the block:
 
-| Action | Blocked when |
-|---|---|
-| Deactivate Crew | they hold **any** work order not yet attested — `Open`, `In Progress`, or unattested `Done` |
-| Deactivate Captain | they are the sole active Captain of an active vessel |
-| Remove a Captain's assignment | same rule — the vessel would have nobody to raise or attest work |
-| Remove a Crew assignment | they hold unattested work orders on that vessel |
-| Deactivate Admin | it is the last active Admin, or the account you are currently using |
-| Deactivate a vessel | it carries any work order not yet attested |
+| Action                        | Blocked when                                                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------- |
+| Deactivate Crew               | they hold **any** work order not yet attested — Open, In Progress, or an unattested Done |
+| Deactivate Captain            | they're the only active Captain on a vessel                                              |
+| Remove a Captain's assignment | same reason — the vessel would be left with nobody to raise or attest work               |
+| Remove a Crew assignment      | they still hold unattested work orders on that vessel                                    |
+| Deactivate an Admin           | it's the last active Admin, or the account currently being used                          |
+| Deactivate a vessel           | it carries any work order not yet attested                                               |
 
-An unattested `Done` order counts as live in every one of these, because a
-Captain can still reject it back to `In Progress`. Deactivating the assignee in
-between would hand active work to an inactive owner.
+An unattested `Done` order counts as active work in every one of these
+rules, because a Captain can still reject it and send it back. Deactivating
+the person responsible in the meantime would leave that work with nobody
+accountable for it.
 
-When a guardrail fires, the Admin screens surface the blocking work order codes
-so the reassign-or-attest path is obvious. `wo_reassign` exists precisely so an
-Admin can clear the way.
-
----
-
-## Concurrency
-
-Two devices can hold the same mock identity at once. That is expected — it is
-the same as one person signed in on a laptop and a phone — and it is not a
-security concern, so there is no session locking, no presence tracking and no
-heartbeat infrastructure to go stale.
-
-What *is* guarded is the write. Every status-changing call sends the state the UI
-believed was current:
-
-```ts
-supabase.rpc("wo_attest", {
-  p_id: workOrder.id,
-  p_expected_status: workOrder.status,      // what this device last saw
-  p_expected_attested: attested,
-});
-```
-
-The RPC applies its `UPDATE` only if those still match, inside one statement. If
-another device got there first the write affects zero rows and the function
-raises `CONFLICT`, which the UI shows as *"this work order was already updated on
-another device — refresh to see the latest"* and then refetches. Attest and
-reject guard on status **and** attestation together, so a near-simultaneous
-attest and reject on the same `Done` order cannot both land.
-
-Supabase Realtime is subscribed to `work_orders`, so in practice the second
-device usually re-renders before its user clicks anything. The guard is what
-makes it correct; realtime just makes it pleasant.
-
----
-
-## Project layout
-
-```
-supabase/migrations/    0001 schema · 0002 RLS · 0003 RPCs and guardrails
-supabase/schema.sql     all three concatenated, for one-paste setup
-
-scripts/seed.ts               demo fleet + hidden auth accounts
-scripts/test-policies.sql     44 assertions over RLS, lifecycle and guardrails
-scripts/local-supabase-stub.sql   fakes auth.uid()/auth.users for local testing
-scripts/visual-check.mjs      responsive screenshots with stubbed network
-
-src/app/                Next.js App Router pages
-  api/impersonate/        the mock-auth sign-in
-  api/admin/users/        the only two writes needing the service-role key
-src/components/         Identity Bar, work order screens, admin screens, UI kit
-src/lib/
-  supabase/client.ts      the single anon-key browser client
-  supabase/admin.ts       server-only service-role clients
-  session.tsx             who am I, what vessel am I looking at
-  database.types.ts       typed mirror of the SQL schema
-  queries.ts              every read, in one place
-  errors.ts               CODE: message → typed UI treatment
-```
-
-Data access is uniform: the browser client with the anon key, under RLS. The two
-server routes exist only because creating a Supabase Auth account is not
-something an anon key can do.
-
----
-
-## Testing
-
-**Database behaviour** — 44 assertions covering the lifecycle, every RLS policy,
-the concurrency guard and every guardrail. Runs against a scratch PostgreSQL 15+
-database; no Supabase project needed.
-
-```bash
-createdb marine
-psql -v ON_ERROR_STOP=1 -d marine -f scripts/local-supabase-stub.sql
-psql -v ON_ERROR_STOP=1 -d marine -f supabase/migrations/0001_schema.sql
-psql -v ON_ERROR_STOP=1 -d marine -f supabase/migrations/0002_rls.sql
-psql -v ON_ERROR_STOP=1 -d marine -f supabase/migrations/0003_functions.sql
-psql -v ON_ERROR_STOP=1 -d marine -f scripts/test-policies.sql
-```
-
-A sample of what it proves:
-
-```
-ok  captain cannot hold two active commands
-ok  captain cannot raise work on a vessel she does not command
-ok  non-assignee crew cannot pick up the order
-ok  stale expected-status write is rejected          -> CONFLICT
-ok  reject cannot race an attest that already landed -> CONFLICT
-ok  crew with an unattested Done order cannot be deactivated
-ok  a captain sees no work orders from vessels he does not command
-ok  crew cannot escalate their own role (RLS matches no rows)
-ok  anon cannot read profiles directly               -> permission denied
-ok  the last active admin can never be deactivated
-```
-
-**Application** —
-
-```bash
-npm run typecheck    # tsc --noEmit, strict
-npm run lint         # eslint, next/core-web-vitals + next/typescript
-npm run build        # production build
-```
-
-**Responsive check** — with the app running, `node scripts/visual-check.mjs`
-writes desktop / tablet / phone screenshots with the network stubbed, and fails
-on any uncaught runtime error.
+When one of these guardrails stops an action, the Admin screen shows exactly
+which work order is causing it, so the fix is obvious — reassign it, or get
+it attested, and try again.
 
 ---
 
 ## Demo accounts
 
-Seeded by `npm run db:seed`. Pick any of them in the Identity Bar; there is no
-password to type anywhere.
+These come from `npm run db:seed`. Pick any of them in the Identity Bar —
+there's no password to type anywhere.
 
-| Person | Role | Vessel |
-|---|---|---|
-| Inés Okonkwo | Admin | fleet-wide |
-| Dmitri Halvorsen | Admin | fleet-wide |
-| Capt. Ana Mora | Captain | MV Northern Star |
-| Capt. Tomas Reyes | Captain | MV Coral Dawn |
-| Capt. Nora Blake | Captain | Harbour Tender Pelican |
-| Miguel Santos | Crew | MV Northern Star |
-| Funke Adeyemi | Crew | MV Northern Star + Harbour Tender Pelican |
-| Erik Larsen | Crew | MV Coral Dawn |
-| Yui Nakamura | Crew | MV Coral Dawn |
-| Tunde Oyelaran | Crew | Harbour Tender Pelican |
+| Person            | Role    | Vessel                                    |
+| ----------------- | ------- | ----------------------------------------- |
+| Inés Okonkwo      | Admin   | fleet-wide                                |
+| Dmitri Halvorsen  | Admin   | fleet-wide                                |
+| Capt. Ana Mora    | Captain | MV Northern Star                          |
+| Capt. Tomas Reyes | Captain | MV Coral Dawn                             |
+| Capt. Nora Blake  | Captain | Harbour Tender Pelican                    |
+| Miguel Santos     | Crew    | MV Northern Star                          |
+| Funke Adeyemi     | Crew    | MV Northern Star + Harbour Tender Pelican |
+| Erik Larsen       | Crew    | MV Coral Dawn                             |
+| Yui Nakamura      | Crew    | MV Coral Dawn                             |
+| Tunde Oyelaran    | Crew    | Harbour Tender Pelican                    |
 
 ### A five-minute tour
 
 1. Sign in as **Capt. Ana Mora**. Raise a work order on MV Northern Star and
    assign it to Miguel Santos.
-2. Switch to **Miguel Santos**. The order is on his board. Pick it up, then
-   complete it with a solution.
-3. Switch back to **Ana Mora** and *reject* it with a reason. It returns to In
-   Progress; the reason is on the work order's history for good.
-4. As Miguel, complete it again. As Ana, attest it. Now it is closed.
-5. Switch to **Capt. Tomas Reyes** — MV Northern Star is not even in his vessel
-   list, and its work orders are invisible to him. That is RLS, not a filter.
-6. Switch to **Inés Okonkwo** (Admin) and try to deactivate Miguel Santos while
-   he still holds an unattested order. The database refuses and names the order.
+2. Switch to **Miguel Santos**. The order shows up on his board. Pick it up,
+   then mark it done with a solution written in.
+3. Switch back to **Ana Mora** and reject it with a reason. It goes back to
+   In Progress, and the reason stays on the work order's history for good.
+4. As Miguel, complete it again. As Ana, attest it this time. It's closed.
+5. Switch to **Capt. Tomas Reyes** — MV Northern Star isn't even in his
+   vessel list, and its work orders are invisible to him. That's the
+   database enforcing it, not a filter hiding it in the interface.
+6. Switch to **Inés Okonkwo** (Admin) and try deactivating Miguel Santos
+   while he still holds an unattested order. It gets refused, and the
+   message names the order.
