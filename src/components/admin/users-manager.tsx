@@ -332,7 +332,9 @@ export function UsersManager() {
   const emailDuplicateQuery = useQuery(
     [debouncedEmail, form.id],
     () => findProfileByEmail(debouncedEmail, form.id),
-    { enabled: open && emailValid && emailSettled && debouncedEmail.length > 0 },
+    {
+      enabled: open && emailValid && emailSettled && debouncedEmail.length > 0,
+    },
   );
   const emailDuplicate = emailDuplicateQuery.data ?? null;
   /** True while the typed value has not been looked up yet. */
@@ -365,6 +367,11 @@ export function UsersManager() {
       : touched.dateOfBirth && !dobValid
         ? `Must be at least ${minAge} years old for the ${form.role} role.`
         : null;
+
+  const noUsersFound =
+    users.length === 0 && (searchName || searchPhone || searchEmail);
+
+  const noUsersYet = users.length === 0;
 
   const valid =
     form.name.trim().length >= 2 &&
@@ -456,7 +463,9 @@ export function UsersManager() {
           <SkeletonRows rows={5} />
         ) : usersQuery.error ? (
           <ErrorState message={usersQuery.error} />
-        ) : users.length === 0 ? (
+        ) : noUsersFound ? (
+          <EmptyState title="No user found" />
+        ) : noUsersYet ? (
           <EmptyState title="No users yet" />
         ) : (
           <TableWrapper>
