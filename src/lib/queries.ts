@@ -150,12 +150,15 @@ export interface Page<T> {
   total: number;
 }
 
+/**
+ * Rows 0..limit-1 of the fleet, plus how many exist in total. Same growing
+ * -limit approach as fetchProfilesPage — see the note there.
+ */
 export async function fetchVesselsPage(options?: {
   includeInactive?: boolean;
-  page?: number;
+  limit?: number;
 }): Promise<Page<VesselRow>> {
-  const page = options?.page ?? 0;
-  const from = page * ADMIN_PAGE_SIZE;
+  const limit = options?.limit ?? ADMIN_PAGE_SIZE;
 
   // `count: "exact"` rides along on the same request — PostgREST returns it in
   // the Content-Range header, so the total costs no extra round trip.
@@ -163,7 +166,7 @@ export async function fetchVesselsPage(options?: {
     .from("vessels")
     .select("*", { count: "exact" })
     .order("name")
-    .range(from, from + ADMIN_PAGE_SIZE - 1);
+    .range(0, limit - 1);
   if (!options?.includeInactive) query = query.eq("active", true);
 
   const { data, error, count } = await query;

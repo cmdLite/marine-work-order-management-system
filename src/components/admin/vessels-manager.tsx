@@ -5,7 +5,13 @@ import { Pencil, Plus, RotateCcw, ShipWheel } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { parseError } from "@/lib/errors";
 import { useList, useQuery } from "@/lib/hooks";
-import { fetchAssignments, fetchProfiles, fetchVessels } from "@/lib/queries";
+import {
+  ADMIN_PAGE_SIZE,
+  fetchAssignmentsForVessels,
+  fetchProfilesByIds,
+  fetchVesselsPage,
+  findVesselByIdentifier,
+} from "@/lib/queries";
 import type { VesselRow } from "@/lib/database.types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,10 +44,44 @@ const EMPTY_FORM: FormState = {
 
 export function VesselsManager() {
   const { toast } = useToast();
-  const vesselsQuery = useQuery([], () => fetchVessels(true));
-  const assignmentsQuery = useQuery([], () => fetchAssignments());
-  const peopleQuery = useQuery([], () =>
-    fetchProfiles({ includeInactive: true }),
+  // The table grows from the top: "Load more" raises this limit and the query
+  // returns rows 0..limit-1 in one request.
+  const [limit, setLimit] = React.useState(ADMIN_PAGE_SIZE);
+
+  const vesselsQuery = useQuery([limit], () =>
+    fetchVesselsPage({ includeInactive: true, limit }),
+  );
+
+  const loadedVessels = React.useMemo(
+    () => vesselsQuery.data?.rows ?? [],
+    [vesselsQuery.data],
+  );
+  const totalVessels = vesselsQuery.data?.total ?? 0;
+  const loadedVesselIds = loadedVessels.map((vessel) => vessel.id).join(",");
+
+  // Complement is only resolved for the vessels on screen, so the assignment
+  // and profile reads stay proportional to what is rendered rather than to the
+  // size of the fleet.
+  const assignmentsQuery = useQuery([loadedVesselIds], () =>
+    fetchAssignmentsForVessels(
+      loadedVesselIds ? loadedVesselIds.split(",") : [],
+    ),
+  );
+
+  const crewIds = React.useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (assignmentsQuery.data ?? [])
+            .filter((assignment) => assignment.active)
+            .map((assignment) => assignment.user_id),
+        ),
+      ).join(","),
+    [assignmentsQuery.data],
+  );
+
+  const peopleQuery = useQuery([crewIds], () =>
+    fetchProfilesByIds(crewIds ? crewIds.split(",") : []),
   );
 
   const [open, setOpen] = React.useState(false);
@@ -146,29 +186,67 @@ export function VesselsManager() {
     }
   }
 
-  const vessels = useList(vesselsQuery.data);
+  const vessels = useList(loadedVessels);
 
-  const imoDuplicate = React.useMemo(() => {
-    const imo = form.imo.trim();
-    if (!imo) return null;
-    return (
-      vessels.find((v) => v.id !== form.id && v.imo_number === imo) ?? null
+  /**
+   * IMO and MMSI are checked against the database rather than the rows on
+   * screen. The table is only partly loaded, so scanning it in memory would
+   * miss a clash further down the fleet — the unique indexes would still refuse
+   * the write, but not until the admin pressed save.
+   */
+  const [debouncedImo, setDebouncedImo] = React.useState("");
+  const [debouncedMmsi, setDebouncedMmsi] = React.useState("");
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedImo(form.imo.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [form.imo]);
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedMmsi(form.mmsi.trim()),
+      300,
     );
-  }, [vessels, form.imo, form.id]);
+    return () => window.clearTimeout(timer);
+  }, [form.mmsi]);
+
+  const imoSettled = debouncedImo === form.imo.trim();
+  const mmsiSettled = debouncedMmsi === form.mmsi.trim();
+
+  const imoQuery = useQuery(
+    [debouncedImo, form.id],
+    () => findVesselByIdentifier("imo_number", debouncedImo, form.id),
+    { enabled: open && imoSettled && debouncedImo.length > 0 },
+  );
+  const mmsiQuery = useQuery(
+    [debouncedMmsi, form.id],
+    () => findVesselByIdentifier("mmsi", debouncedMmsi, form.id),
+    { enabled: open && mmsiSettled && debouncedMmsi.length > 0 },
+  );
+
+  const imoDuplicate = imoQuery.data ?? null;
+  const mmsiDuplicate = mmsiQuery.data ?? null;
+
+  const imoChecking =
+    open && form.imo.trim().length > 0 && (!imoSettled || imoQuery.loading);
+  const mmsiChecking =
+    open && form.mmsi.trim().length > 0 && (!mmsiSettled || mmsiQuery.loading);
+
   const imoError = imoDuplicate
     ? `This IMO number is already used by ${imoDuplicate.name}.`
     : null;
-
-  const mmsiDuplicate = React.useMemo(() => {
-    const mmsi = form.mmsi.trim();
-    if (!mmsi) return null;
-    return vessels.find((v) => v.id !== form.id && v.mmsi === mmsi) ?? null;
-  }, [vessels, form.mmsi, form.id]);
   const mmsiError = mmsiDuplicate
     ? `This MMSI is already used by ${mmsiDuplicate.name}.`
     : null;
 
-  const valid = form.name.trim().length > 1 && !imoDuplicate && !mmsiDuplicate;
+  const valid =
+    form.name.trim().length > 1 &&
+    !imoDuplicate &&
+    !mmsiDuplicate &&
+    // Held shut while either lookup is in flight, so a clash cannot slip
+    // through in the gap between typing and the answer arriving.
+    !imoChecking &&
+    !mmsiChecking;
 
   return (
     <div className="flex flex-col gap-4">
@@ -271,6 +349,22 @@ export function VesselsManager() {
             </Table>
           </TableWrapper>
         )}
+
+        {vessels.length < totalVessels ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 p-3">
+            <span className="text-xs text-muted">
+              Showing {vessels.length} of {totalVessels} vessels
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={vesselsQuery.loading}
+              onClick={() => setLimit((current) => current + ADMIN_PAGE_SIZE)}
+            >
+              Load more
+            </Button>
+          </div>
+        ) : null}
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
