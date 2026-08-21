@@ -1,0 +1,121 @@
+@import "tailwindcss";
+
+@theme {
+  --color-hull-50: #f2f6fa;
+  --color-hull-100: #e3ecf4;
+  --color-hull-200: #c6d8e8;
+  --color-hull-300: #9ab9d4;
+  --color-hull-400: #6893ba;
+  --color-hull-500: #46739f;
+  --color-hull-600: #365b83;
+  --color-hull-700: #2d4a6a;
+  --color-hull-800: #294059;
+  --color-hull-900: #26374b;
+  --color-hull-950: #182432;
+
+  --color-signal-50: #fff8ed;
+  --color-signal-100: #ffefd4;
+  --color-signal-200: #ffdba8;
+  --color-signal-300: #ffc171;
+  --color-signal-400: #ff9c38;
+  --color-signal-500: #ff7d12;
+  --color-signal-600: #f06106;
+  --color-signal-700: #c74907;
+  --color-signal-800: #9e3a0e;
+  --color-signal-900: #7f320f;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  :root {
+    --background: #f6f8fb;
+    --surface: #ffffff;
+    --surface-muted: #f2f5f9;
+    --border: #e2e8f0;
+    --foreground: #16202c;
+    --foreground-muted: #5b6b7f;
+    --ring: var(--color-hull-500);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  * {
+    border-color: var(--border);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Only hide the caret where a custom control already shows one. */
+  select {
+    color-scheme: light;
+  }
+}
+
+@layer utilities {
+  .surface {
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+  }
+
+  .text-muted {
+    color: var(--foreground-muted);
+  }
+
+  .animate-in-fade {
+    animation: fade-in 140ms ease-out;
+  }
+
+  .animate-in-pop {
+    animation: pop-in 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
