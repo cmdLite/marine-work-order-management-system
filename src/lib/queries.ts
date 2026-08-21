@@ -171,23 +171,44 @@ export async function fetchVesselsPage(options?: {
   return { rows: data ?? [], total: count ?? 0 };
 }
 
+/**
+ * Rows 0..limit-1 of the people list, plus how many exist in total.
+ *
+ * "Load more" raises the limit and refetches from the top rather than
+ * accumulating pages in component state. One query always returns the whole
+ * visible list, so the rows on screen cannot drift out of order or double up,
+ * and refreshing after an edit keeps the list expanded where the admin left it.
+ */
 export async function fetchProfilesPage(options?: {
   includeInactive?: boolean;
-  page?: number;
+  limit?: number;
 }): Promise<Page<ProfileRow>> {
-  const page = options?.page ?? 0;
-  const from = page * ADMIN_PAGE_SIZE;
+  const limit = options?.limit ?? ADMIN_PAGE_SIZE;
 
   let query = supabase
     .from("profiles")
     .select("*", { count: "exact" })
     .order("name")
-    .range(from, from + ADMIN_PAGE_SIZE - 1);
+    .range(0, limit - 1);
   if (!options?.includeInactive) query = query.eq("active", true);
 
   const { data, error, count } = await query;
   if (error) throw error;
   return { rows: data ?? [], total: count ?? 0 };
+}
+
+/** Assignments for just the people currently listed. */
+export async function fetchAssignmentsForUsers(
+  userIds: string[],
+): Promise<VesselAssignmentRow[]> {
+  if (userIds.length === 0) return [];
+  return unwrap(
+    await supabase
+      .from("vessel_assignments")
+      .select("*")
+      .in("user_id", userIds)
+      .order("assigned_at"),
+  );
 }
 
 /** Assignments for just the vessels currently on screen. */

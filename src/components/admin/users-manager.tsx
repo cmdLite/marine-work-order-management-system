@@ -12,7 +12,13 @@ import { supabase } from "@/lib/supabase/client";
 import { apiFetch } from "@/lib/api";
 import { parseError } from "@/lib/errors";
 import { useList, useQuery } from "@/lib/hooks";
-import { fetchAssignments, fetchProfiles, fetchVessels } from "@/lib/queries";
+import {
+  ADMIN_PAGE_SIZE,
+  fetchAssignmentsForUsers,
+  fetchProfilesPage,
+  fetchVessels,
+  findProfileByEmail,
+} from "@/lib/queries";
 import type {
   ProfileRow,
   SoftDuplicateRow,
@@ -78,11 +84,34 @@ export function UsersManager() {
   const { toast } = useToast();
   const [showInactive, setShowInactive] = React.useState(true);
 
-  const usersQuery = useQuery([showInactive], () =>
-    fetchProfiles({ includeInactive: showInactive }),
+  // The table grows from the top rather than paging: "Load more" raises this
+  // limit and the query returns rows 0..limit-1 in one request. Toggling the
+  // inactive filter collapses it back — adjusted during render rather than in
+  // an effect, so there is no extra paint showing a stale, over-long list.
+  const [limit, setLimit] = React.useState(ADMIN_PAGE_SIZE);
+  const [renderedShowInactive, setRenderedShowInactive] =
+    React.useState(showInactive);
+  if (showInactive !== renderedShowInactive) {
+    setRenderedShowInactive(showInactive);
+    setLimit(ADMIN_PAGE_SIZE);
+  }
+
+  const usersQuery = useQuery([showInactive, limit], () =>
+    fetchProfilesPage({ includeInactive: showInactive, limit }),
   );
   const vesselsQuery = useQuery([], () => fetchVessels(true));
-  const assignmentsQuery = useQuery([], () => fetchAssignments());
+
+  const loadedUsers = React.useMemo(
+    () => usersQuery.data?.rows ?? [],
+    [usersQuery.data],
+  );
+  const totalUsers = usersQuery.data?.total ?? 0;
+  const loadedUserIds = loadedUsers.map((user) => user.id).join(",");
+
+  // Only the people actually on screen need their vessel assignments resolved.
+  const assignmentsQuery = useQuery([loadedUserIds], () =>
+    fetchAssignmentsForUsers(loadedUserIds ? loadedUserIds.split(",") : []),
+  );
 
   const [open, setOpen] = React.useState(false);
   const [form, setForm] = React.useState<FormState>(EMPTY_FORM);
@@ -257,18 +286,39 @@ export function UsersManager() {
     }
   }
 
-  const users = useList(usersQuery.data);
+  const users = useList(loadedUsers);
 
   const emailValid = EMAIL_REGEX.test(form.email.trim());
-  const emailDuplicate = React.useMemo(() => {
-    const email = form.email.trim().toLowerCase();
-    if (!email) return null;
-    return (
-      users.find(
-        (user) => user.id !== form.id && user.email.toLowerCase() === email,
-      ) ?? null
+
+  /**
+   * Checked against the database rather than the rows on screen. The table is
+   * only partly loaded now, so an in-memory scan would miss a clash further
+   * down the list — the unique index would still refuse the write, but the
+   * admin would not find out until after pressing save.
+   */
+  const [debouncedEmail, setDebouncedEmail] = React.useState("");
+  React.useEffect(() => {
+    const timer = window.setTimeout(
+      () => setDebouncedEmail(form.email.trim()),
+      300,
     );
-  }, [users, form.email, form.id]);
+    return () => window.clearTimeout(timer);
+  }, [form.email]);
+
+  const emailSettled = debouncedEmail === form.email.trim();
+  const emailDuplicateQuery = useQuery(
+    [debouncedEmail, form.id],
+    () => findProfileByEmail(debouncedEmail, form.id),
+    { enabled: open && emailValid && emailSettled && debouncedEmail.length > 0 },
+  );
+  const emailDuplicate = emailDuplicateQuery.data ?? null;
+  /** True while the typed value has not been looked up yet. */
+  const emailChecking =
+    open &&
+    emailValid &&
+    form.email.trim().length > 0 &&
+    (!emailSettled || emailDuplicateQuery.loading);
+
   const phoneValid =
     form.phone === "" || (form.phone.length >= 11 && form.phone.length <= 20); // telephone and mobile phone
 
@@ -282,7 +332,7 @@ export function UsersManager() {
       : touched.email && !emailValid
         ? "Enter a valid email address (e.g. name@example.com)."
         : touched.email && emailDuplicate
-          ? `This email is already used.`
+          ? `This email is already used by ${emailDuplicate.name}.`
           : null;
   const phoneError =
     touched.phone && !phoneValid ? "Enter only 11 to 20 digits." : null;
@@ -297,6 +347,9 @@ export function UsersManager() {
     form.name.trim().length >= 2 &&
     emailValid &&
     !emailDuplicate &&
+    // Hold Save shut while the lookup is in flight, so a duplicate cannot slip
+    // through in the gap between typing and the answer coming back.
+    !emailChecking &&
     phoneValid &&
     dobValid;
 
@@ -392,6 +445,22 @@ export function UsersManager() {
             </Table>
           </TableWrapper>
         )}
+
+        {users.length < totalUsers ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 p-3">
+            <span className="text-xs text-muted">
+              Showing {users.length} of {totalUsers} users
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={usersQuery.loading}
+              onClick={() => setLimit((current) => current + ADMIN_PAGE_SIZE)}
+            >
+              Load more
+            </Button>
+          </div>
+        ) : null}
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
