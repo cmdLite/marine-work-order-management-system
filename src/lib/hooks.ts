@@ -97,24 +97,47 @@ export function useQuery<T>(
  * than annoying: the second device usually sees the new state before its user
  * clicks anything, and if it does not, the write is still rejected safely.
  */
-export function useRealtimeRefresh(table: string, onChange: () => void) {
+export function useRealtimeRefresh(
+  table: string,
+  onChange: () => void,
+  /**
+   * Optional PostgREST filter (e.g. `vessel_id=eq.<uuid>`). Without it every
+   * connected client wakes up and refetches on every row change in the table;
+   * with it, a change on one vessel only disturbs the people looking at that
+   * vessel. RLS still applies either way — this is about noise, not access.
+   */
+  filter?: string,
+) {
   const handlerRef = React.useRef(onChange);
   React.useEffect(() => {
     handlerRef.current = onChange;
   });
 
+  // Normalised to a string so the dependency list is the same shape on every
+  // render whether or not a filter was passed.
+  const filterKey = filter ?? "";
+
   React.useEffect(() => {
+    // The filter is part of the channel name so switching vessels tears the old
+    // subscription down instead of quietly reusing it with stale criteria.
     const channel = supabase
-      .channel(`realtime:${table}`)
-      .on("postgres_changes", { event: "*", schema: "public", table }, () =>
-        handlerRef.current(),
+      .channel(`realtime:${table}:${filterKey || "all"}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table,
+          ...(filterKey ? { filter: filterKey } : {}),
+        },
+        () => handlerRef.current(),
       )
       .subscribe();
 
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [table]);
+  }, [table, filterKey]);
 }
 
 /** Tracks an in-flight mutation so buttons can disable themselves. */

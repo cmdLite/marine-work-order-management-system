@@ -26,12 +26,19 @@ function unwrap<T>(result: { data: T | null; error: unknown }): T {
   return (result.data ?? []) as T;
 }
 
+/** Rows per request on the work order board. */
+export const WORK_ORDER_PAGE_SIZE = 25;
+
 export interface WorkOrderFilters {
   vesselId: string | null;
   status: WorkOrderStatus | "all";
   attestation: "all" | "attested" | "unattested";
   assignedTo?: string | null;
   search?: string;
+  /** Cap the result set — used by the dashboard, which only renders a few rows. */
+  limit?: number;
+  /** Zero-based page. Ignored unless `limit` is set. */
+  page?: number;
 }
 
 export async function fetchWorkOrders(
@@ -40,8 +47,15 @@ export async function fetchWorkOrders(
   let query = supabase
     .from("work_orders_expanded")
     .select("*")
-    .order("created_at", { ascending: false })
-    .limit(200);
+    .order("created_at", { ascending: false });
+
+  if (filters.limit) {
+    const page = filters.page ?? 0;
+    const from = page * filters.limit;
+    // `range` is inclusive at both ends, so ask for one extra row: its presence
+    // is how the caller knows another page exists without a second count query.
+    query = query.range(from, from + filters.limit);
+  }
 
   if (filters.vesselId) query = query.eq("vessel_id", filters.vesselId);
   if (filters.status !== "all") query = query.eq("status", filters.status);
@@ -57,6 +71,50 @@ export async function fetchWorkOrders(
   }
 
   return unwrap(await query);
+}
+
+/**
+ * Dashboard tile totals, counted in Postgres. Returns the counts for everything
+ * the caller may see — not just the page of rows currently on screen — so the
+ * tiles stay correct however large the table gets.
+ */
+export async function fetchWorkOrderCounts(vesselId: string | null): Promise<{
+  open: number;
+  inProgress: number;
+  awaiting: number;
+  attested: number;
+}> {
+  const { data, error } = await supabase.rpc("wo_counts", {
+    p_vessel_id: vesselId,
+  });
+  if (error) throw error;
+
+  const row = data?.[0];
+  return {
+    open: Number(row?.open_count ?? 0),
+    inProgress: Number(row?.in_progress_count ?? 0),
+    awaiting: Number(row?.awaiting_count ?? 0),
+    attested: Number(row?.attested_count ?? 0),
+  };
+}
+
+/** Active / inactive totals for the admin tiles, without fetching any rows. */
+export async function fetchRowCounts(
+  table: "vessels" | "profiles",
+): Promise<{ active: number; inactive: number }> {
+  const [activeResult, totalResult] = await Promise.all([
+    supabase
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .eq("active", true),
+    supabase.from(table).select("id", { count: "exact", head: true }),
+  ]);
+
+  if (activeResult.error) throw activeResult.error;
+  if (totalResult.error) throw totalResult.error;
+
+  const active = activeResult.count ?? 0;
+  return { active, inactive: (totalResult.count ?? 0) - active };
 }
 
 export async function fetchWorkOrder(

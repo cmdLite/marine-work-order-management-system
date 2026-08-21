@@ -103,6 +103,18 @@ export type MeRow = {
   active: boolean;
 }
 
+/**
+ * Postgres `count()` returns bigint. Depending on the PostgREST version that
+ * arrives as a JSON number or a string, so the query layer coerces it rather
+ * than trusting one or the other.
+ */
+export type WorkOrderCountsRow = {
+  open_count: number | string;
+  in_progress_count: number | string;
+  awaiting_count: number | string;
+  attested_count: number | string;
+}
+
 export type SoftDuplicateRow = {
   id: string;
   name: string;
@@ -189,6 +201,10 @@ export type Database = {
           p_expected_status: WorkOrderStatus;
         };
         Returns: WorkOrderRow;
+      };
+      wo_counts: {
+        Args: { p_vessel_id?: string | null };
+        Returns: WorkOrderCountsRow[];
       };
       admin_find_soft_duplicates: {
         Args: {

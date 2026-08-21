@@ -12,8 +12,13 @@ import {
 } from "lucide-react";
 import { useSession } from "@/lib/session";
 import { useList, useQuery, useRealtimeRefresh } from "@/lib/hooks";
-import { fetchProfiles, fetchVessels, fetchWorkOrders } from "@/lib/queries";
-import type { WorkOrderExpandedRow } from "@/lib/database.types";
+import {
+  fetchRowCounts,
+  fetchWorkOrderCounts,
+  fetchWorkOrders,
+  type WorkOrderFilters,
+} from "@/lib/queries";
+import type { UserRole, WorkOrderExpandedRow } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/badge";
@@ -22,48 +27,75 @@ import { WorkOrderActions } from "@/components/work-orders/work-order-actions";
 import { CreateWorkOrderDialog } from "@/components/work-orders/create-work-order-dialog";
 import { cn, relativeTime } from "@/lib/utils";
 
+/** Rows shown in the dashboard queue — also what we ask the database for. */
+const QUEUE_SIZE = 8;
+
+/**
+ * The queue is narrowed server-side by role, so the dashboard fetches only the
+ * handful of rows it actually renders instead of pulling the whole table and
+ * filtering it in the browser.
+ */
+function queueFilters(
+  vesselId: string | null,
+  role: UserRole | null,
+  profileId: string | null,
+): WorkOrderFilters {
+  const base: WorkOrderFilters = {
+    vesselId,
+    status: "all",
+    attestation: "unattested",
+    limit: QUEUE_SIZE,
+  };
+  if (role === "crew") return { ...base, assignedTo: profileId };
+  if (role === "captain") return { ...base, status: "done" };
+  return base;
+}
+
 export function Dashboard() {
   const { profile, activeVesselId, activeVessel, vessels } = useSession();
 
-  const workOrdersQuery = useQuery([activeVesselId], () =>
-    fetchWorkOrders({ vesselId: activeVesselId, status: "all", attestation: "all" }),
-  );
-  useRealtimeRefresh("work_orders", workOrdersQuery.refresh);
-
   const isAdmin = profile?.role === "admin";
-  const fleetQuery = useQuery([isAdmin], () => fetchVessels(true), {
+
+  // Tile totals come from a Postgres aggregate, not from counting fetched rows —
+  // so they stay correct no matter how many work orders exist.
+  const countsQuery = useQuery([activeVesselId], () =>
+    fetchWorkOrderCounts(activeVesselId),
+  );
+
+  const role = profile?.role ?? null;
+  const profileId = profile?.id ?? null;
+
+  const workOrdersQuery = useQuery(
+    [activeVesselId, role, profileId],
+    () => fetchWorkOrders(queueFilters(activeVesselId, role, profileId)),
+    { enabled: Boolean(profile) },
+  );
+
+  const refreshAll = React.useCallback(() => {
+    workOrdersQuery.refresh();
+    countsQuery.refresh();
+  }, [workOrdersQuery, countsQuery]);
+
+  useRealtimeRefresh(
+    "work_orders",
+    refreshAll,
+    activeVesselId ? `vessel_id=eq.${activeVesselId}` : undefined,
+  );
+
+  const fleetQuery = useQuery([isAdmin], () => fetchRowCounts("vessels"), {
     enabled: isAdmin,
   });
-  const peopleQuery = useQuery([isAdmin], () => fetchProfiles({ includeInactive: true }), {
+  const peopleQuery = useQuery([isAdmin], () => fetchRowCounts("profiles"), {
     enabled: isAdmin,
   });
 
-  const workOrders = useList(workOrdersQuery.data);
-
-  const counts = React.useMemo(() => {
-    const open = workOrders.filter((row) => row.status === "open").length;
-    const inProgress = workOrders.filter((row) => row.status === "in_progress").length;
-    const awaiting = workOrders.filter(
-      (row) => row.status === "done" && row.attested_at === null,
-    ).length;
-    const attested = workOrders.filter((row) => row.attested_at !== null).length;
-    return { open, inProgress, awaiting, attested };
-  }, [workOrders]);
-
-  const myQueue = React.useMemo(() => {
-    if (!profile) return [];
-    if (profile.role === "crew") {
-      return workOrders.filter(
-        (row) => row.assigned_crew_id === profile.id && row.attested_at === null,
-      );
-    }
-    if (profile.role === "captain") {
-      return workOrders.filter(
-        (row) => row.status === "done" && row.attested_at === null,
-      );
-    }
-    return workOrders.filter((row) => row.attested_at === null);
-  }, [workOrders, profile]);
+  const counts = countsQuery.data ?? {
+    open: 0,
+    inProgress: 0,
+    awaiting: 0,
+    attested: 0,
+  };
+  const myQueue = useList(workOrdersQuery.data);
 
   const queueTitle =
     profile?.role === "crew"
@@ -80,28 +112,28 @@ export function Dashboard() {
           value={counts.open}
           icon={ClipboardList}
           tone="bg-sky-50 text-sky-700"
-          loading={workOrdersQuery.loading}
+          loading={countsQuery.loading}
         />
         <StatTile
           label="In progress"
           value={counts.inProgress}
           icon={PlayCircle}
           tone="bg-amber-50 text-amber-700"
-          loading={workOrdersQuery.loading}
+          loading={countsQuery.loading}
         />
         <StatTile
           label="Awaiting attestation"
           value={counts.awaiting}
           icon={Hourglass}
           tone="bg-violet-50 text-violet-700"
-          loading={workOrdersQuery.loading}
+          loading={countsQuery.loading}
         />
         <StatTile
           label="Attested"
           value={counts.attested}
           icon={ClipboardCheck}
           tone="bg-emerald-50 text-emerald-700"
-          loading={workOrdersQuery.loading}
+          loading={countsQuery.loading}
         />
       </section>
 
@@ -109,8 +141,8 @@ export function Dashboard() {
         <section className="grid gap-3 sm:grid-cols-2">
           <StatTile
             label="Vessels"
-            value={fleetQuery.data?.filter((vessel) => vessel.active).length ?? 0}
-            secondary={`${fleetQuery.data?.filter((vessel) => !vessel.active).length ?? 0} inactive`}
+            value={fleetQuery.data?.active ?? 0}
+            secondary={`${fleetQuery.data?.inactive ?? 0} inactive`}
             icon={Ship}
             tone="bg-hull-50 text-hull-700"
             loading={fleetQuery.loading}
@@ -118,8 +150,8 @@ export function Dashboard() {
           />
           <StatTile
             label="People"
-            value={peopleQuery.data?.filter((person) => person.active).length ?? 0}
-            secondary={`${peopleQuery.data?.filter((person) => !person.active).length ?? 0} deactivated`}
+            value={peopleQuery.data?.active ?? 0}
+            secondary={`${peopleQuery.data?.inactive ?? 0} deactivated`}
             icon={Users}
             tone="bg-rose-50 text-rose-700"
             loading={peopleQuery.loading}
@@ -144,11 +176,11 @@ export function Dashboard() {
             <Button variant="secondary" size="sm" asChild>
               <Link href="/work-orders">Open the board</Link>
             </Button>
-            <CreateWorkOrderDialog onCreated={workOrdersQuery.refresh} />
+            <CreateWorkOrderDialog onCreated={refreshAll} />
           </div>
         </CardHeader>
 
-        {workOrdersQuery.loading && workOrders.length === 0 ? (
+        {workOrdersQuery.loading && myQueue.length === 0 ? (
           <SkeletonRows rows={3} />
         ) : workOrdersQuery.error ? (
           <ErrorState message={workOrdersQuery.error} />
@@ -159,11 +191,11 @@ export function Dashboard() {
           />
         ) : (
           <ul className="divide-y divide-slate-100">
-            {myQueue.slice(0, 8).map((workOrder) => (
+            {myQueue.slice(0, QUEUE_SIZE).map((workOrder) => (
               <QueueRow
                 key={workOrder.id}
                 workOrder={workOrder}
-                onChanged={workOrdersQuery.refresh}
+                onChanged={refreshAll}
               />
             ))}
           </ul>

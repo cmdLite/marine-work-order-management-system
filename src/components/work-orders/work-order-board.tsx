@@ -5,7 +5,11 @@ import Link from "next/link";
 import { ClipboardList, RefreshCw, Search } from "lucide-react";
 import { useSession } from "@/lib/session";
 import { useList, useQuery, useRealtimeRefresh } from "@/lib/hooks";
-import { fetchWorkOrders, type WorkOrderFilters } from "@/lib/queries";
+import {
+  fetchWorkOrders,
+  WORK_ORDER_PAGE_SIZE,
+  type WorkOrderFilters,
+} from "@/lib/queries";
 import type { WorkOrderStatus } from "@/lib/database.types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -52,8 +56,27 @@ export function WorkOrderBoard() {
 
   const assignedTo = mineOnly ? (profile?.id ?? null) : null;
 
+  // Rows are paged out of the database rather than fetched all at once, so the
+  // board stays responsive whether the fleet has fifty work orders or fifty
+  // thousand. Any filter change starts again from the first page — adjusted
+  // during render rather than in an effect, so there is no extra paint showing
+  // page 3 of a result set that no longer exists.
+  const filterKey = JSON.stringify([
+    activeVesselId,
+    status,
+    attestation,
+    assignedTo,
+    debounced,
+  ]);
+  const [page, setPage] = React.useState(0);
+  const [renderedFilterKey, setRenderedFilterKey] = React.useState(filterKey);
+  if (filterKey !== renderedFilterKey) {
+    setRenderedFilterKey(filterKey);
+    setPage(0);
+  }
+
   const { data, loading, error, refresh } = useQuery(
-    [activeVesselId, status, attestation, assignedTo, debounced],
+    [activeVesselId, status, attestation, assignedTo, debounced, page],
     () =>
       fetchWorkOrders({
         vesselId: activeVesselId,
@@ -61,12 +84,33 @@ export function WorkOrderBoard() {
         attestation,
         assignedTo,
         search: debounced,
+        limit: WORK_ORDER_PAGE_SIZE,
+        page,
       }),
   );
 
-  useRealtimeRefresh("work_orders", refresh);
+  const pageRows = useList(data);
+  // fetchWorkOrders asks for one row beyond the page; getting it back is how we
+  // know there is another page, without paying for a separate count query.
+  const hasMore = pageRows.length > WORK_ORDER_PAGE_SIZE;
+  const workOrders = React.useMemo(
+    () => (hasMore ? pageRows.slice(0, WORK_ORDER_PAGE_SIZE) : pageRows),
+    [pageRows, hasMore],
+  );
 
-  const workOrders = useList(data);
+  const firstRowNumber = page * WORK_ORDER_PAGE_SIZE + 1;
+  const lastRowNumber = page * WORK_ORDER_PAGE_SIZE + workOrders.length;
+
+  const reload = React.useCallback(() => {
+    setPage(0);
+    refresh();
+  }, [refresh]);
+
+  useRealtimeRefresh(
+    "work_orders",
+    reload,
+    activeVesselId ? `vessel_id=eq.${activeVesselId}` : undefined,
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -108,7 +152,11 @@ export function WorkOrderBoard() {
             <div className="flex items-center gap-3 text-xs text-muted">
               <span>
                 {activeVessel ? activeVessel.name : "All vessels"} ·{" "}
-                {loading ? "…" : `${workOrders.length} work order${workOrders.length === 1 ? "" : "s"}`}
+                {loading && workOrders.length === 0
+                  ? "…"
+                  : `${workOrders.length} work order${workOrders.length === 1 ? "" : "s"}${
+                      hasMore || page > 0 ? " on this page" : ""
+                    }`}
               </span>
               {profile?.role !== "admin" ? (
                 <label className="flex cursor-pointer items-center gap-1.5">
@@ -123,10 +171,10 @@ export function WorkOrderBoard() {
               ) : null}
             </div>
             <div className="flex gap-2">
-              <Button variant="secondary" size="sm" onClick={refresh}>
+              <Button variant="secondary" size="sm" onClick={reload}>
                 <RefreshCw /> Refresh
               </Button>
-              <CreateWorkOrderDialog onCreated={refresh} />
+              <CreateWorkOrderDialog onCreated={reload} />
             </div>
           </div>
         </div>
@@ -199,7 +247,7 @@ export function WorkOrderBoard() {
                         <div className="flex justify-end">
                           <WorkOrderActions
                             workOrder={workOrder}
-                            onChanged={refresh}
+                            onChanged={reload}
                           />
                         </div>
                       </Td>
@@ -235,10 +283,36 @@ export function WorkOrderBoard() {
                     Assigned to {workOrder.assigned_crew_name} · updated{" "}
                     {relativeTime(workOrder.updated_at)}
                   </p>
-                  <WorkOrderActions workOrder={workOrder} onChanged={refresh} />
+                  <WorkOrderActions workOrder={workOrder} onChanged={reload} />
                 </li>
               ))}
             </ul>
+
+            {hasMore || page > 0 ? (
+              <div className="flex items-center justify-between gap-3 border-t border-slate-100 p-3">
+                <span className="text-xs text-muted">
+                  Showing {firstRowNumber}–{lastRowNumber}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={page === 0 || loading}
+                    onClick={() => setPage((current) => Math.max(0, current - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={!hasMore || loading}
+                    onClick={() => setPage((current) => current + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </>
         )}
       </Card>

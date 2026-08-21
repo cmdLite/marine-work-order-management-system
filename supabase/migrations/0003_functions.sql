@@ -913,6 +913,34 @@ left join public.profiles attester on attester.id = w.attested_by;
 revoke all on public.work_orders_expanded from anon;
 grant select on public.work_orders_expanded to authenticated;
 
+-- Dashboard tiles, counted in Postgres rather than by fetching the rows and
+-- counting them in the browser. SECURITY INVOKER (the default) is deliberate:
+-- the counts must be filtered by the caller's own RLS, so a Captain's totals
+-- only ever cover vessels they command.
+create or replace function public.wo_counts(p_vessel_id uuid default null)
+returns table (
+  open_count        bigint,
+  in_progress_count bigint,
+  awaiting_count    bigint,
+  attested_count    bigint
+)
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+  select
+    count(*) filter (where w.status = 'open'),
+    count(*) filter (where w.status = 'in_progress'),
+    count(*) filter (where w.status = 'done' and w.attested_at is null),
+    count(*) filter (where w.attested_at is not null)
+  from public.work_orders w
+  where p_vessel_id is null or w.vessel_id = p_vessel_id;
+$$;
+
+revoke execute on function public.wo_counts(uuid) from public;
+grant execute on function public.wo_counts(uuid) to authenticated;
+
 -- =============================================================================
 -- SECTION 5 — Realtime
 -- =============================================================================

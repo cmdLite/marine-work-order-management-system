@@ -277,6 +277,20 @@ properly once I was already in the area.
   work order, not just its current state. This is also where the guardrails
   live: the system won't let an Admin deactivate someone, or stand a Captain
   down, while they're still needed to close out active work.
+- **The screens are built to stay fast as the data grows.** Three things in
+  particular:
+  - The dashboard's totals are counted by Postgres (a `wo_counts` function),
+    not by fetching rows and counting them in JavaScript. That matters for
+    more than speed — counting fetched rows means the moment the fleet
+    outgrows one page, the tiles start quietly reporting numbers that are
+    too low. Counting in the database keeps them right at any size.
+  - The work order board pages through the database 25 rows at a time
+    instead of pulling the whole table, and every filter — status,
+    attestation, assignee, search — is applied in SQL rather than in the
+    browser, so narrowing the list makes the query smaller instead of just
+    hiding rows that were already downloaded.
+  - The dashboard queue asks for only the handful of rows it actually shows,
+    filtered by role on the server.
 - **I closed a permission gap that isn't visible from the UI.** Early on,
   the `vessel_assignments` table technically allowed an Admin's raw
   database call to bypass the same guardrails described above — for
