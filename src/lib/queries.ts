@@ -182,20 +182,44 @@ export async function fetchVesselsPage(options?: {
  * visible list, so the rows on screen cannot drift out of order or double up,
  * and refreshing after an edit keeps the list expanded where the admin left it.
  */
+export interface ProfileSearch {
+  name?: string;
+  email?: string;
+  phone?: string;
+}
+
+/**
+ * Strips the characters PostgREST treats as pattern or list syntax before the
+ * term goes into an `ilike`, leaving `%` as the only wildcard in play.
+ */
+function safeTerm(value: string | undefined): string {
+  return (value ?? "").trim().replace(/[%,()]/g, " ").trim();
+}
+
 export async function fetchProfilesPage(options?: {
   includeInactive?: boolean;
   limit?: number;
+  search?: ProfileSearch;
 }): Promise<Page<ProfileRow>> {
   const limit = options?.limit ?? ADMIN_PAGE_SIZE;
 
   let query = supabase
     .from("profiles")
     .select("*", { count: "exact" })
-    .order("name")
-    .range(0, limit - 1);
+    .order("name");
   if (!options?.includeInactive) query = query.eq("active", true);
 
-  const { data, error, count } = await query;
+  // Filtering happens in SQL, so search covers the whole table rather than the
+  // rows already loaded — and `count` comes back for the filtered set, which is
+  // what "Showing 3 of 3" should reflect once a search is on.
+  const name = safeTerm(options?.search?.name);
+  const email = safeTerm(options?.search?.email);
+  const phone = safeTerm(options?.search?.phone);
+  if (name) query = query.ilike("name", `%${name}%`);
+  if (email) query = query.ilike("email", `%${email}%`);
+  if (phone) query = query.ilike("phone", `%${phone}%`);
+
+  const { data, error, count } = await query.range(0, limit - 1);
   if (error) throw error;
   return { rows: data ?? [], total: count ?? 0 };
 }

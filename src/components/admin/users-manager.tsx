@@ -6,6 +6,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   UserMinus,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -18,6 +19,7 @@ import {
   fetchProfilesPage,
   fetchVessels,
   findProfileByEmail,
+  type ProfileSearch,
 } from "@/lib/queries";
 import type {
   ProfileRow,
@@ -84,20 +86,41 @@ export function UsersManager() {
   const { toast } = useToast();
   const [showInactive, setShowInactive] = React.useState(true);
 
+  const [searchName, setSearchName] = React.useState("");
+  const [searchEmail, setSearchEmail] = React.useState("");
+  const [searchPhone, setSearchPhone] = React.useState("");
+  const [search, setSearch] = React.useState<ProfileSearch>({});
+
+  React.useEffect(() => {
+    const timer = window.setTimeout(
+      () =>
+        setSearch({
+          name: searchName.trim(),
+          email: searchEmail.trim(),
+          phone: searchPhone.trim(),
+        }),
+      300,
+    );
+    return () => window.clearTimeout(timer);
+  }, [searchName, searchEmail, searchPhone]);
+
+  const searchKey = JSON.stringify(search);
+  const hasSearch = Boolean(search.name || search.email || search.phone);
+
   // The table grows from the top rather than paging: "Load more" raises this
-  // limit and the query returns rows 0..limit-1 in one request. Toggling the
-  // inactive filter collapses it back — adjusted during render rather than in
-  // an effect, so there is no extra paint showing a stale, over-long list.
+  // limit and the query returns rows 0..limit-1 in one request. Changing the
+  // filters collapses it back — adjusted during render rather than in an
+  // effect, so there is no extra paint showing a stale, over-long list.
   const [limit, setLimit] = React.useState(ADMIN_PAGE_SIZE);
-  const [renderedShowInactive, setRenderedShowInactive] =
-    React.useState(showInactive);
-  if (showInactive !== renderedShowInactive) {
-    setRenderedShowInactive(showInactive);
+  const filterKey = `${showInactive}|${searchKey}`;
+  const [renderedFilterKey, setRenderedFilterKey] = React.useState(filterKey);
+  if (filterKey !== renderedFilterKey) {
+    setRenderedFilterKey(filterKey);
     setLimit(ADMIN_PAGE_SIZE);
   }
 
-  const usersQuery = useQuery([showInactive, limit], () =>
-    fetchProfilesPage({ includeInactive: showInactive, limit }),
+  const usersQuery = useQuery([showInactive, limit, searchKey], () =>
+    fetchProfilesPage({ includeInactive: showInactive, limit, search }),
   );
   const vesselsQuery = useQuery([], () => fetchVessels(true));
 
@@ -369,6 +392,62 @@ export function UsersManager() {
           <Button onClick={openCreate}>
             <Plus /> New user
           </Button>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex flex-col gap-3 p-3 sm:p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-hull-900">
+              <Search className="size-4 text-slate-400" aria-hidden />
+              Search users
+            </div>
+            {hasSearch ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setSearchName("");
+                  setSearchEmail("");
+                  setSearchPhone("");
+                }}
+              >
+                Clear
+              </Button>
+            ) : null}
+          </div>
+
+          {/* Each field takes the full width on the smallest screens, then the
+              three sit side by side once there is room. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Field label="Name" htmlFor="search-name">
+              <Input
+                id="search-name"
+                value={searchName}
+                onChange={(event) => setSearchName(event.target.value)}
+                placeholder="Search by name…"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Email" htmlFor="search-email">
+              <Input
+                id="search-email"
+                value={searchEmail}
+                onChange={(event) => setSearchEmail(event.target.value)}
+                placeholder="Search by email…"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Phone" htmlFor="search-phone">
+              <Input
+                id="search-phone"
+                value={searchPhone}
+                onChange={(event) => setSearchPhone(event.target.value)}
+                placeholder="Search by phone…"
+                autoComplete="off"
+              />
+            </Field>
+          </div>
         </div>
       </Card>
 
